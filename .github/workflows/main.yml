@@ -1,57 +1,37 @@
-name: Build and Deploy
+# 此文件相当简单
+# 1. 检测到main分支有提交触发jobs任务
+# 2. 指定一个github服务器的环境ubuntu-latest
+# 3. 执行pull当前的代码到github服务器
+# 4. 直接登录docker, 并制作镜像(所有安装依赖等都写在dockerfile中, 不在此执行)
+# 5. 连接远程服务器, 停止/删除容器, 重新拉取最新镜像, 启动
+name: CI/CD
 
 on:
   push:
     branches:
-      - main # 或者你希望部署的分支
+      - main
 
 jobs:
-  # Job for building
-  build:
-    runs-on: ubuntu-latest
-    env:
-      CI: false
+  docker: # 描述词, 无实际意义
+    runs-on: ubuntu-latest # 运行的环境
+    # 步骤
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v3 # 相当于执行git pull操作，以获取最新的代码
 
-      - name: Install Node.js
-        uses: actions/setup-node@v2
+      - name: 打包镜像, 上传 Docker Hub # 描述词, 无实际意义
+        run: | # 当前服务器依次执行下面的命令
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login -u luode0320 --password-stdin
+          docker build -t luode0320/tg-clip-web:latest .
+          docker push luode0320/tg-clip-web:latest
+      - name: 登录服务器, 执行脚本 # 描述词, 无实际意义
+        uses: appleboy/ssh-action@master # 通过SSH登录到远程服务器
         with:
-          node-version: 18
+          host: ${{ secrets.REMOTE_HOST }}
+          username: root
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          port: 22
+          script: | # 远程服务器依次执行下面的命令, 删除容器, 删除镜像, 拉取最新镜像, 启动容器 
+            docker rm -f tg-clip-web
+            docker rmi luode0320/tg-clip-web:latest
+            docker run -d -p 3333:3000 --restart=always --name tg-clip-web luode0320/tg-clip-web:latest
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build app
-        run: npm run build
-
-      - name: Archive production artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: build
-          path: build/
-
-  # Job for deployment
-  deploy:
-    needs: [build] # This job needs to be run after the build job is completed
-    runs-on: self-hosted
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: build
-
-      - name: Remove unnecessary files and directories
-        run: |
-          rm -rf .github .git Docs public src .env .env.example .gitignore Dockerfile README.md nginx.conf package-lock.json package.json
-
-      - name: Deploy app
-        run: |
-          rsync -av ./ /var/www/newclip
-          sudo systemctl reload nginx
-      - name: Clean Up
-        run: rm -rf ./*
